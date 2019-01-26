@@ -16,20 +16,16 @@
 # 76: Deopt error; other edge-case error
 # 77: Deopt error; BOOTCLASSPATH entry missing from RAMDisk rc files, or out of sync with vdex table
 
-# TODO LIST:
-# - Port over file_contexts rebuild from java
-# - Support for deopting non-boot packages which have multiple classes.dex files (hard-coded right now)
-# - Fix assumption that we're on arm64
-
-# enforce sudo
+# enforce sudo (no way around this)
 if [ $(id -u) != "0" ]; then
 	echo "[!] Please run under root/sudo"
 	exit 0
 fi
 
 PREPTOOL_BIN="$( cd "$( dirname "${BASH_SOURCE[0]}" )/bin" >/dev/null && pwd )"
-# debug flag
+# debug flags
 deoptOnly="false"
+skipDeopt="false"
 
 if [ -d "$1" ]; then
 	src="$1"
@@ -81,7 +77,7 @@ if [ -d "$1" ]; then
 		# extract system and vendor
 		for imageName in "system" "vendor"; do
 			if [ -d "${out}/${imageName}" ]; then
-				echo "[i] {out}/${imageName} already exists, skipping"
+				echo "[i] {out}/${imageName}/ already exists, skipping"
 				continue
 			fi
 			echo "[#] Processing ${imageName} ..."
@@ -138,7 +134,7 @@ if [ -d "$1" ]; then
 				fi
 				
 				# We use debugfs here as it's the only WSL-compatible way to extract ext4 images
-				echo "    [#] Dumping {src}/${imageName}.img contents to {out}/${imageName}/"
+				echo "    [#] Dumping {out}/${imageName}.img contents to {out}/${imageName}/"
 				rm -f "${out}/${imageName}"
 				mkdir "${out}/${imageName}"
 				debugfs "${out}/${imageName}.img" -R "rdump / ${out}/${imageName}/" >/dev/null
@@ -147,13 +143,15 @@ if [ -d "$1" ]; then
 					echo "    [#] Backing-up ACL..."
 					pushd "${out}/${imageName}/" >/dev/null
 					getfacl -R . > "../${imageName}.acl"
-					echo "    [#] Clearing permissions..."
-					chmod -R 777 .
 					popd >/dev/null
 				else
 					echo "        [!] Error - could not dump ext4 image"
 					exit 70
 				fi
+				
+				# Delete the source img (no longer needed)
+				# Maybe add an override option for this later?
+				rm "${out}/${imageName}.img"
 			else
 				if [ ! -d "${src}/${imageName}" ]; then
 					# .img file not found, nor is extracted filesystem
@@ -179,7 +177,7 @@ if [ -d "$1" ]; then
 	fi
 	
 	# Deopt
-	if [ -f "${out}/system/framework/arm64/boot-framework.oat" ]; then
+	if [ -f "${out}/system/framework/arm64/boot-framework.oat" -a "${skipDeopt}" != "true" ]; then
 		echo "[i] Starting deopt (deodex), logging to {out}/deopt.log"
 		rm -rf "${out}/deopt.log"
 		rm -rf "${out}/deopt_tmp"
@@ -233,25 +231,29 @@ if [ -d "$1" ]; then
 				# verify exactly one vdex file exists
 				if [ ${#appVdexFiles[@]} -ne 1 -o ! -d "${deoptOut}/${systemSubdir}/${appDir}/oat/arm64/" ]; then
 					# echo to console and log
-					echo "            [i] No vdex file found, skipping (either already deopted or resource-only APK)"
-					echo "            [i] No vdex file found, skipping (either already deopted or resource-only APK)" >>"${out}/deopt.log" 2>&1
+					echo "            [i] No vdex file found, skipping (resource-only APK?)"
+					echo "            [i] No vdex file found, skipping (resource-only APK?)" >>"${out}/deopt.log" 2>&1
 					continue
 				fi
 				
 				# extract dex from vdex
-				deoptDexOutput="${deoptOut}/../vdexExtractor_deodexed/${appDir}/${appDir}_classes.dex"
 				"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/${systemSubdir}/${appDir}/oat/arm64/${appVdexFiles[0]}" -o "${deoptOut}/../" >>"${out}/deopt.log" 2>&1
-				# error-out if non-zero return or output dex missing
-				if [ $? -ne 0 -o ! -f "${deoptDexOutput}" ]; then
-					echo "            [!] Error during vdex extraction (see {out}/deopt.log)."
-					echo "            [!] Error during vdex extraction" >>"${out}/deopt.log" 2>&1
+				# error-out if non-zero return
+				if [ $? -ne 0 ]; then
+					echo "            [!] Error during vdex extraction (see deopt.log)."
 					exit 74
 				fi
-				
-				# got the dex file - rename and zip it to the APK
-				mv "${deoptDexOutput}" "${deoptOut}/${systemSubdir}/${appDir}/classes.dex"
-				pushd "${deoptOut}/${systemSubdir}/${appDir}/" > /dev/null
-				zip -u9 "${appApkFiles[0]}" "classes.dex" >>"${out}/deopt.log" 2>&1
+				# rename and move the dex file(s) in preparation for zipping back to the original package...
+				pushd "${deoptOut}/../vdexExtractor_deodexed/${appDir}/" > /dev/null
+				for dexFile in *.dex; do
+					mv "${dexFile}" "${dexFile/${appDir}_/}"
+				done
+				targetDir="${deoptOut}/${systemSubdir}/${appDir}/"
+				mv *.dex "${targetDir}"
+				popd > /dev/null
+				# ...now zip it back to the package
+				pushd "${targetDir}" > /dev/null
+				zip -u9 "${appApkFiles[0]}" *.dex >>"${out}/deopt.log" 2>&1
 				if [ $? -ne 0 -a $? -ne 12 ]; then
 					# Note to self: error code 12 = "nothing to do" (doesn't need updating)
 					echo "            [!] Error during deopt process (zip error; see {out}/deopt.log)."
@@ -259,7 +261,7 @@ if [ -d "$1" ]; then
 					exit 75
 				fi
 				# cleanup
-				rm -f "./classes.dex"
+				rm -f classes*.dex
 				rm -rf "${deoptOut}/${systemSubdir}/${appDir}/oat"
 				popd > /dev/null
 			done
@@ -279,32 +281,40 @@ if [ -d "$1" ]; then
 				echo "        [!] Error - SHOULD NOT HAPPEN - could not find ${targetJar}. Aborting."
 				exit 76
 			fi
-			deoptDexOutput="${deoptOut}/../vdexExtractor_deodexed/${vdexFile%.*}/${vdexFile%.*}_classes.dex"
-			"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/oat/arm64/${vdexFile}" -o "${deoptOut}/.." >>"${out}/deopt.log" 2>&1
-			# error-out if non-zero return or output dex missing
-			if [ $? -ne 0 -o ! -f "${deoptDexOutput}" ]; then
-				echo "            [!] Error during vdex extraction (see {out}/deopt.log)."
-				echo "            [!] Error during vdex extraction" >>"${out}/deopt.log" 2>&1
+			
+			"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/oat/arm64/${vdexFile}" -o "${deoptOut}/../" >>"${out}/deopt.log" 2>&1
+			# error-out if non-zero return
+			if [ $? -ne 0 ]; then
+				echo "            [!] Error during vdex extraction (see deopt.log)."
 				exit 74
 			fi
-			
-			# got the dex file - rename and zip it to the APK
-			mv "${deoptDexOutput}" "${deoptOut}/framework/classes.dex"
-			pushd "${deoptOut}/framework/" > /dev/null
-			zip -u9 "${targetJar}" "classes.dex" >>"${out}/deopt.log" 2>&1
+			# rename and move the dex file(s) in preparation for zipping back to the original package...
+			pushd "${deoptOut}/../vdexExtractor_deodexed/${vdexFile%.*}/" > /dev/null
+			for dexFile in *.dex; do
+				mv "${dexFile}" "${dexFile/${vdexFile%.*}_/}"
+			done
+			targetDir="${deoptOut}/framework/"
+			mv *.dex "${targetDir}"
+			popd > /dev/null
+			# ...now zip it back to the package
+			pushd "${targetDir}" > /dev/null
+			zip -u9 "${targetJar}" *.dex >>"${out}/deopt.log" 2>&1
 			if [ $? -ne 0 -a $? -ne 12 ]; then
 				# Note to self: error code 12 = "nothing to do" (doesn't need updating)
 				echo "            [!] Error during deopt process (zip error; see {out}/deopt.log)."
 				echo "            [!] Error during deopt process" >>"${out}/deopt.log" 2>&1
 				exit 75
 			fi
-			rm "classes.dex"
+			# cleanup
+			rm -f "./classes*.dex"
+			rm -rf "${deoptOut}/${systemSubdir}/${appDir}/oat"
+			popd > /dev/null
 		done
 		# cleanup
 		rm -rf "${deoptOut}/framework/oat"
 		rm -rf "${deoptOut}/../vdexExtractor_deodexed"
 		
-#echo "~~~ Returning early (before bootclasspath deopt)"
+#echo "~~~ Debug returning early (before bootclasspath deopt)"
 #exit 0
 		
 		### DEBUG switch
@@ -314,7 +324,7 @@ if [ -d "$1" ]; then
 		###############################
 		# Finally do boot jars
 		###############################
-		echo "    [#] Preparing to deopt boot jars..."
+		echo "    [#] Deopt boot jars..."
 		# Get the readable strings from any 'ol .oat file (they all contain the bootclasspath remapped to .art file paths which is alongside vdex files)
 		rm -f "${deoptOut}_vDexStringsDump"
 		strings "${deoptOut}/framework/arm64/boot-framework.oat" > "${deoptOut}_vDexStringsDump"
@@ -326,15 +336,14 @@ if [ -d "$1" ]; then
 		vDexBootClassesUnsplit="$(sed 's/out\/target\/.*\/system\/framework\/arm64\///g; s/\.art//g' <<< "${vDexBootClassPath}")"
 		#vDexBootClasses="$(readarray -t y <<< "${vDexBootClassesUnsplit}")"
 		IFS=$'\n' vDexBootClasses=($vDexBootClassesUnsplit)
-		# Now, "${vDexBootClasses}" will contain a list like so:
+		# Now, "${vDexBootClasses}" will contain a list like e.g.:
 		#     /system/framework/boot
 		#     [...]
 		#     /system/app/miuisystem/boot-miuisystem
-		# ...i.e. the vdex filename (without extension) and their origin path. It will correspond to the init bootclasspath:
+		# ...i.e. the vdex filename (without extension) and their origin path. This array is parallel with the array built from bootclasspath, e.g.:
 		#     /system/framework/QPerformance.jar
 		#     [...]
 		#     /system/app/miuisystem/miuisystem.apk
-		# Deopt'ing the non-boot jars is relatively trivial though
 
 		# Next, get the BOOTCLASSPATH from initramfs - need to find the file that contains BOOTCLASSPATH entry first
 		bootClassPathFile="$(grep -Elr --include=*.rc "BOOTCLASSPATH" "${out}/boot/ramdisk/")"
@@ -352,7 +361,6 @@ if [ -d "$1" ]; then
 			exit 77
 		fi
 		
-		echo "    [#] Deopt boot jars..."
 		mkdir -p "${deoptOut}/boot"
 		for i in "${!vDexBootClasses[@]}"; do
 			echo "        [#] $(basename ${vDexBootClasses[i]}).vdex ( for ${initBootClasses[i]} )..."
@@ -382,37 +390,37 @@ if [ -d "$1" ]; then
 			rm -f "./classes*.dex"
 			# also delete original vdex
 			rm -f "${deoptOut}/framework/$(basename ${vDexBootClasses[i]}).vdex"
+			rm -f "${deoptOut}/framework/*/$(basename ${vDexBootClasses[i]}).vdex" > /dev/null
 			popd > /dev/null
 		done
 		
-		#for bootVdexFile in "${deoptOut}/framework"/*.vdex; do
+		# all done, merge the deopt packages and cleanup
+		echo "[#] Cleaning up..."
+		rm -rf "${out}/system/framework/" "${out}/system/app/" "${out}/system/priv-app/"
+		mv "${deoptOut}/framework/" "${out}/system/framework/"
+		mv "${deoptOut}/app/" "${out}/system/app/"
+		mv "${deoptOut}/priv-app/" "${out}/system/priv-app/"
 		
-		#done
-		
-		#for i in "${!vDexBootClasses[@]}"; do 
-			#echo "        [#] $(basename ${vDexBootClasses[i]}).vdex ( for ${initBootClasses[i]} )..."
-			#"${KITCHEN_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/arm64/$(basename ${vDexBootClasses[i]}).vdex" -o "${deoptOut}/boot/$(basename ${vDexBootClasses[i]})" > /dev/null
-			#vdexExtractorOutput="${deoptOut}/boot/$(basename ${vDexBootClasses[i]})/vdexExtractor_deodexed/"
-			#if [ $? -ne 0 -o 
-			
-			
-			#echo "---------------------------------"
-			#echo ${vDexBootClasses[i]}
-			#echo ${initBootClasses[i]}
-			#echo "---------------------------------"
-		#done;
+		if [ -n "$(find "${out}/deopt_tmp" -empty -type d 2>/dev/null)" ]; then
+			rm -rf "${out}/deopt_tmp"
+		else 
+			echo "[!] The 'deopt_tmp' folder contains one or more files - likely an error has occured. Please report this issue."
+		fi
 	else
-		echo "[i] Skipping deopt (already done?)"
+		echo "[i] Skipping deopt (appears to already be deopt'd, or manually disabled via debug flag)"
 	fi
+	
+	echo "    [#] Setting unpacked firmware permissions to global rw..."
+	chmod -R 777 "${out}/"
+	
+	echo "[i] All done!"
+	echo ""
+	exit 0
 else
 	echo "[i] Usage:"
 	echo "    ${BASH_SOURCE[0]} srcFirmwareDir [outDir]"
 	exit 0
 fi
-
-echo "[i] All done!"
-echo ""
-exit 0
 
 
 ########################################################################################################################################################
