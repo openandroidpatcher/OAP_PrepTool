@@ -29,6 +29,8 @@ PREPTOOL_BIN="$( cd "$( dirname "${BASH_SOURCE[0]}" )/bin" >/dev/null && pwd )"
 deoptOnly="false"
 skipDeopt="false"
 
+source "${PREPTOOL_BIN}/preptool_functions.sh"
+
 if [ -d "$1" ]; then
 	src="$1"
 	out="${src%/}.oap-prepped"
@@ -96,6 +98,7 @@ if [ -d "$1" ]; then
 						exit 67
 					else
 						echo "        ...OK"
+						setOAPSrcProp compressBr 1
 					fi
 				else
 					echo "    [i] {out}/${imageName}.new.dat already exists, skipping ${imageName}.new.dat.br decompression"
@@ -115,6 +118,7 @@ if [ -d "$1" ]; then
 					fi
 					# clean on successful decompress
 					rm -f "${out}/${imageName}.new.dat"
+					setOAPSrcProp compressDat 1
 				else
 					echo "    [i] {out}/${imageName}.img already exists, skipping ${imageName}.new.dat conversion."
 				fi
