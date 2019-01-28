@@ -16,6 +16,8 @@
 # 76: Deopt error; other edge-case error
 # 77: Deopt error; BOOTCLASSPATH entry missing from RAMDisk rc files, or out of sync with vdex table
 
+# TODO: Better logging (e.g. echo deopt commands)
+
 # enforce sudo (no way around this)
 if [ $(id -u) != "0" ]; then
 	echo "[!] Please run under root/sudo"
@@ -410,7 +412,11 @@ if [ -d "$1" ]; then
 		echo "[i] Skipping deopt (appears to already be deopt'd, or manually disabled via debug flag)"
 	fi
 	
-	echo "    [#] Setting unpacked firmware permissions to global rw..."
+	# Copy other files to {out} (everything except boot.*, system.* and vendor.*)
+	echo "[#] Copying misc files from {src} to {out}..."
+	rsync -a --exclude="boot.*" --exclude="system.*" --exclude="vendor.*" "${src}/" "${out}/"
+	
+	echo "[#] Setting unpacked firmware permissions to global rw..."
 	chmod -R 777 "${out}/"
 	
 	echo "[i] All done!"
