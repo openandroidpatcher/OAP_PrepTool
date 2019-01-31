@@ -155,6 +155,13 @@ if [ -d "$1" ]; then
 					exit 70
 				fi
 				
+				# Save filesystem info
+				echo "    [#] Saving filesystem info..."
+				imageBlockCount=$(dumpe2fs "${out}/${imageName}.img" | grep 'Block count:' | sed 's|[^0-9]*||g')
+				imageBlockSize=$(dumpe2fs "${out}/${imageName}.img" | grep 'Block size:' | sed 's|[^0-9]*||g')
+				setOAPSrcProp "${imageName}.blockCount" "${imageBlockCount}"
+				setOAPSrcProp "${imageName}.blockSize" "${imageBlockSize}"
+				
 				# Delete the source img (no longer needed)
 				# Maybe add an override option for this later?
 				rm "${out}/${imageName}.img"
