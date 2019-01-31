@@ -60,7 +60,7 @@ if [ -d "$1" ]; then
 			else
 				echo "[#] Extracting boot.img..."
 				mkdir "${out}/boot"
-				"${PREPTOOL_BIN}/aik/unpackimg.sh" --nosudo "${src}/boot.img" > "${out}/boot.img-unpack.log" 2>&1
+				"${PREPTOOL_BIN}/aik/unpackimg.sh" "${src}/boot.img" > "${out}/boot.img-unpack.log" 2>&1
 				mv "${PREPTOOL_BIN}/aik/split_img" "${out}/boot/split_img"
 				mv "${PREPTOOL_BIN}/aik/ramdisk" "${out}/boot/ramdisk"
 				if [ ! -f "${out}/boot/split_img/boot.img-zImage" -o ! -f "${out}/boot/ramdisk/init" ]; then
