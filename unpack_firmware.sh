@@ -410,6 +410,7 @@ if [ -d "$1" ]; then
 		# all done, merge the deopt packages and cleanup
 		echo "[#] Cleaning up..."
 		rm -rf "${out}/system/framework/" "${out}/system/app/" "${out}/system/priv-app/"
+		rm -rf "${deoptOut}/framework/arm" "${deoptOut}/framework/arm64"
 		mv "${deoptOut}/framework/" "${out}/system/framework/"
 		mv "${deoptOut}/app/" "${out}/system/app/"
 		mv "${deoptOut}/priv-app/" "${out}/system/priv-app/"
