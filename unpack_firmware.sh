@@ -37,17 +37,23 @@ if [ -d "$1" ]; then
 	if [ "$2" != "" ]; then
 		out="$2"
 	fi
+	
+	if [ -d "${out}" ]; then
+		echo "[!] Output folder..."
+		echo "    ${out}"
+		echo "    ...already exists. Please (re)move it and try again."
+		exit 64
+	fi
+	
 	echo "[#] Starting unpack of firmware from"
 	echo "    ${src}"
 	echo "    ...to..."
 	echo "    ${out}"
 	
-	if [ ! -d "${out}" ]; then
-		mkdir "${out}"
-		if [ ! -d "${out}" ]; then
-			echo "[!] Could not create output directory, aborting."
-			exit 64
-		fi
+	mkdir -p "${out}/oap"
+	if [ ! -d "${out}/oap" ]; then
+		echo "[!] Could not create output directory, aborting."
+		exit 64
 	fi
 	
 	if [ "${deoptOnly}" != "true" ]; then
@@ -60,11 +66,11 @@ if [ -d "$1" ]; then
 			else
 				echo "[#] Extracting boot.img..."
 				mkdir "${out}/boot"
-				"${PREPTOOL_BIN}/aik/unpackimg.sh" "${src}/boot.img" > "${out}/boot.img-unpack.log" 2>&1
+				"${PREPTOOL_BIN}/aik/unpackimg.sh" "${src}/boot.img" > "${out}/oap/boot.img-unpack.log" 2>&1
 				mv "${PREPTOOL_BIN}/aik/split_img" "${out}/boot/split_img"
 				mv "${PREPTOOL_BIN}/aik/ramdisk" "${out}/boot/ramdisk"
 				if [ ! -f "${out}/boot/split_img/boot.img-zImage" -o ! -f "${out}/boot/ramdisk/init" ]; then
-					echo "    [!] Failure detected. Check {out}/boot.img-unpack.log for details."
+					echo "    [!] Failure detected. Check {out}/oap/boot.img-unpack.log for details."
 					exit 65
 				else
 					echo "    ...OK!"
@@ -148,7 +154,7 @@ if [ -d "$1" ]; then
 					# dump succeeded, do permissions
 					echo "    [#] Backing-up ACL..."
 					pushd "${out}/${imageName}/" >/dev/null
-					getfacl -R . > "../${imageName}.acl"
+					getfacl -R . > "../oap/${imageName}.acl"
 					popd >/dev/null
 				else
 					echo "        [!] Error - could not dump ext4 image"
@@ -163,7 +169,6 @@ if [ -d "$1" ]; then
 				setOAPSrcProp "${imageName}.blockSize" "${imageBlockSize}"
 				
 				# Delete the source img (no longer needed)
-				# Maybe add an override option for this later?
 				rm "${out}/${imageName}.img"
 			else
 				if [ ! -d "${src}/${imageName}" ]; then
@@ -183,16 +188,17 @@ if [ -d "$1" ]; then
 			exit 72
 		fi
 		echo "[#] Rebuilding file_contexts..."
-		cat "${fileContextsSrc1}" "${fileContextsSrc2}" > "${out}/file_contexts_tmp"
-		# Sort and remove duplicate entries. OAP java kitchen has a better method for this, but that's Java - port it over as a standalone applet
-		sort -u -k1,1 "${out}/file_contexts_tmp" > "${out}/file_contexts"
-		rm -f "${out}/file_contexts_tmp"
+		cat "${fileContextsSrc1}" "${fileContextsSrc2}" > "${out}/oap/file_contexts_tmp"
+		# Sort and remove duplicate entries. 
+		# TODO: OAP java kitchen (reminder: at E:\Android\~OpenAndroidPatcher\OpenAndroidPatcher) has a better method for this, but that's Java so will need to be ported over as a standalone applet
+		sort -u -k1,1 "${out}/oap/file_contexts_tmp" > "${out}/oap/file_contexts_sorted"
+		rm -f "${out}/oap/file_contexts_tmp"
 	fi
 	
 	# Deopt
 	if [ -f "${out}/system/framework/arm64/boot-framework.oat" -a "${skipDeopt}" != "true" ]; then
-		echo "[i] Starting deopt (deodex), logging to {out}/deopt.log"
-		rm -rf "${out}/deopt.log"
+		echo "[i] Starting deopt (deodex), logging to {out}/oap/deopt.log"
+		rm -rf "${out}/oap/deopt.log"
 		rm -rf "${out}/deopt_tmp"
 		deoptOut="${out}/deopt_tmp/OUT"
 		mkdir -p "${deoptOut}"
@@ -216,7 +222,7 @@ if [ -d "$1" ]; then
 				# trim trailing slashes
 				appDir=$(echo $appDir | sed 's|/*$||')
 				echo "        [#] system/${systemSubdir}/${appDir}..."
-				echo "        [#] system/${systemSubdir}/${appDir}..." >>"${out}/deopt.log" 2>&1
+				echo "        [#] system/${systemSubdir}/${appDir}..." >>"${out}/oap/deopt.log" 2>&1
 				
 				# verify that there's exactly one apk file, if not then abort
 				pushd "${deoptOut}/${systemSubdir}/${appDir}/" > /dev/null
@@ -225,7 +231,7 @@ if [ -d "$1" ]; then
 				if [ ${#appApkFiles[@]} -ne 1 ]; then
 					# echo to console and log
 					echo "            [!] Could not find exactly one APK file for this package. Deopt aborted."
-					echo "            [!] Could not find exactly one APK file for this package. Deopt aborted." >>"${out}/deopt.log" 2>&1
+					echo "            [!] Could not find exactly one APK file for this package. Deopt aborted." >>"${out}/oap/deopt.log" 2>&1
 					exit 73
 				fi
 				
@@ -245,29 +251,29 @@ if [ -d "$1" ]; then
 						popd > /dev/null
 						# show a warning (since we're assuming the ROM is arm64), echo to console and log
 						echo "            [!] Warning - package only has an arm (32-bit) vdex. This may or may not be a problem."
-						echo "            [!] Warning - package only has an arm (32-bit) vdex. This may or may not be a problem." >>"${out}/deopt.log" 2>&1
+						echo "            [!] Warning - package only has an arm (32-bit) vdex. This may or may not be a problem." >>"${out}/oap/deopt.log" 2>&1
 					fi
 				fi
 				# ...skip package if we still found no vdex
 				if [ ${#appVdexFiles[@]} -ne 1 ]; then
 					# echo to console and log
 					echo "            [i] No vdex file found, skipping (already de-opted or resource-only APK)"
-					echo "            [i] No vdex file found, skipping (already de-opted or resource-only APK)" >>"${out}/deopt.log" 2>&1
+					echo "            [i] No vdex file found, skipping (already de-opted or resource-only APK)" >>"${out}/oap/deopt.log" 2>&1
 					continue
 				fi
 				
 				# check if the APK already contains a classes.dex (e.g. Gapps)
-				unzip -l "${deoptOut}/${systemSubdir}/${appDir}/${appApkFiles[0]}" | grep -q ' classes.dex' >>"${out}/deopt.log" 2>&1
+				unzip -l "${deoptOut}/${systemSubdir}/${appDir}/${appApkFiles[0]}" | grep -q ' classes.dex' >>"${out}/oap/deopt.log" 2>&1
 				if [ "$?" == "0" ];	then
 					# echo to console and log
 					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting other odex/vdex if present)"
-					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting other odex/vdex if present)" >>"${out}/deopt.log" 2>&1
+					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting other odex/vdex if present)" >>"${out}/oap/deopt.log" 2>&1
 					rm -rf "${deoptOut}/${systemSubdir}/${appDir}/oat"
 					continue
 				fi
 
 				# extract dex from vdex
-				"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/${systemSubdir}/${appDir}/oat/${appVdexArch}/${appVdexFiles[0]}" -o "${deoptOut}/../" >>"${out}/deopt.log" 2>&1
+				"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/${systemSubdir}/${appDir}/oat/${appVdexArch}/${appVdexFiles[0]}" -o "${deoptOut}/../" >>"${out}/oap/deopt.log" 2>&1
 				# error-out if non-zero return
 				if [ $? -ne 0 ]; then
 					echo "            [!] Error during vdex extraction (see deopt.log)."
@@ -283,11 +289,11 @@ if [ -d "$1" ]; then
 				popd > /dev/null
 				# ...now zip it back to the package
 				pushd "${targetDir}" > /dev/null
-				zip -u9 "${appApkFiles[0]}" *.dex >>"${out}/deopt.log" 2>&1
+				zip -u9 "${appApkFiles[0]}" *.dex >>"${out}/oap/deopt.log" 2>&1
 				if [ $? -ne 0 -a $? -ne 12 ]; then
 					# Note to self: error code 12 = "nothing to do" (doesn't need updating)
-					echo "            [!] Error during deopt process (zip error; see {out}/deopt.log)."
-					echo "            [!] Error during deopt process" >>"${out}/deopt.log" 2>&1
+					echo "            [!] Error during deopt process (zip error; see {out}/oap/deopt.log)."
+					echo "            [!] Error during deopt process" >>"${out}/oap/deopt.log" 2>&1
 					exit 75
 				fi
 				# cleanup
@@ -312,7 +318,7 @@ if [ -d "$1" ]; then
 				exit 76
 			fi
 			
-			"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/oat/arm64/${vdexFile}" -o "${deoptOut}/../" >>"${out}/deopt.log" 2>&1
+			"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/oat/arm64/${vdexFile}" -o "${deoptOut}/../" >>"${out}/oap/deopt.log" 2>&1
 			# error-out if non-zero return
 			if [ $? -ne 0 ]; then
 				echo "            [!] Error during vdex extraction (see deopt.log)."
@@ -328,11 +334,11 @@ if [ -d "$1" ]; then
 			popd > /dev/null
 			# ...now zip it back to the package
 			pushd "${targetDir}" > /dev/null
-			zip -u9 "${targetJar}" *.dex >>"${out}/deopt.log" 2>&1
+			zip -u9 "${targetJar}" *.dex >>"${out}/oap/deopt.log" 2>&1
 			if [ $? -ne 0 -a $? -ne 12 ]; then
 				# Note to self: error code 12 = "nothing to do" (doesn't need updating)
-				echo "            [!] Error during deopt process (zip error; see {out}/deopt.log)."
-				echo "            [!] Error during deopt process" >>"${out}/deopt.log" 2>&1
+				echo "            [!] Error during deopt process (zip error; see {out}/oap/deopt.log)."
+				echo "            [!] Error during deopt process" >>"${out}/oap/deopt.log" 2>&1
 				exit 75
 			fi
 			# cleanup
@@ -394,7 +400,7 @@ if [ -d "$1" ]; then
 		mkdir -p "${deoptOut}/boot"
 		for i in "${!vDexBootClasses[@]}"; do
 			echo "        [#] $(basename ${vDexBootClasses[i]}).vdex ( for ${initBootClasses[i]} )..."
-			"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/$(basename ${vDexBootClasses[i]}).vdex" -o "${deoptOut}/boot" >>"${out}/deopt.log" 2>&1
+			"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/framework/$(basename ${vDexBootClasses[i]}).vdex" -o "${deoptOut}/boot" >>"${out}/oap/deopt.log" 2>&1
 			# error-out if non-zero return
 			if [ $? -ne 0 ]; then
 				echo "            [!] Error during vdex extraction (see deopt.log)."
@@ -410,11 +416,11 @@ if [ -d "$1" ]; then
 			popd > /dev/null
 			# ...now zip it back to the APK
 			pushd "${targetDir}" > /dev/null
-			zip -u9 "$(basename ${initBootClasses[i]})" *.dex >>"${out}/deopt.log" 2>&1
+			zip -u9 "$(basename ${initBootClasses[i]})" *.dex >>"${out}/oap/deopt.log" 2>&1
 			if [ $? -ne 0 -a $? -ne 12 ]; then
 				# Note to self: error code 12 = "nothing to do" (doesn't need updating)
-				echo "            [!] Error during deopt process (zip error; see {out}/deopt.log)."
-				echo "            [!] Error during deopt process" >>"${out}/deopt.log" 2>&1
+				echo "            [!] Error during deopt process (zip error; see {out}/oap/deopt.log)."
+				echo "            [!] Error during deopt process" >>"${out}/oap/deopt.log" 2>&1
 				exit 75
 			fi
 			rm -f "./classes*.dex"

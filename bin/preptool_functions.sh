@@ -3,7 +3,7 @@
 # $1 = Prop key
 # $2 = New value
 setOAPSrcProp() {
-	propFile="${out}/OAPsrc.prop"
+	propFile="${out}/oap/srcinfo.prop"
 	propKey="$1"
 	propValue="$2"
 	if [ ! -f "${propFile}" ]; then touch "${propFile}"; fi
