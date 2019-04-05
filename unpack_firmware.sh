@@ -209,10 +209,15 @@ if [ -d "$1" ]; then
 			deOptDirs2do=(*/)
 			popd > /dev/null
 			for appDir in "${deOptDirs2do[@]}"; do
+				# unset last-run vars
+				unset appVdexFiles
+				unset appVdexArch
+				
 				# trim trailing slashes
 				appDir=$(echo $appDir | sed 's|/*$||')
 				echo "        [#] system/${systemSubdir}/${appDir}..."
 				echo "        [#] system/${systemSubdir}/${appDir}..." >>"${out}/deopt.log" 2>&1
+				
 				# verify that there's exactly one apk file, if not then abort
 				pushd "${deoptOut}/${systemSubdir}/${appDir}/" > /dev/null
 				appApkFiles=(*.apk)
@@ -224,33 +229,45 @@ if [ -d "$1" ]; then
 					exit 73
 				fi
 				
-				# verify that there's exactly one vdex file, if not then skip it (assume already deopt'd)
+				# verify that there's exactly one vdex file
 				if [ -d "${deoptOut}/${systemSubdir}/${appDir}/oat/arm64/" ]; then
 					pushd "${deoptOut}/${systemSubdir}/${appDir}/oat/arm64/" > /dev/null
 					appVdexFiles=(*.vdex)
+					appVdexArch="arm64"
 					popd > /dev/null
 				fi
+				# ...sometimes the vdex is in arm instead of arm64 for some reason (MIUI quirk?), check there too if needed
+				if [ ${#appVdexFiles[@]} -ne 1 ]; then
+					if [ -d "${deoptOut}/${systemSubdir}/${appDir}/oat/arm/" ]; then
+						pushd "${deoptOut}/${systemSubdir}/${appDir}/oat/arm/" > /dev/null
+						appVdexFiles=(*.vdex)
+						appVdexArch="arm"
+						popd > /dev/null
+						# show a warning (since we're assuming the ROM is arm64), echo to console and log
+						echo "            [!] Warning - package only has an arm (32-bit) vdex. This may or may not be a problem."
+						echo "            [!] Warning - package only has an arm (32-bit) vdex. This may or may not be a problem." >>"${out}/deopt.log" 2>&1
+					fi
+				fi
+				# ...skip package if we still found no vdex
+				if [ ${#appVdexFiles[@]} -ne 1 ]; then
+					# echo to console and log
+					echo "            [i] No vdex file found, skipping (already de-opted or resource-only APK)"
+					echo "            [i] No vdex file found, skipping (already de-opted or resource-only APK)" >>"${out}/deopt.log" 2>&1
+					continue
+				fi
 				
-				# check if the APK already contains a classes.dex (e.g. AndroidPlatformServices)
+				# check if the APK already contains a classes.dex (e.g. Gapps)
 				unzip -l "${deoptOut}/${systemSubdir}/${appDir}/${appApkFiles[0]}" | grep -q ' classes.dex' >>"${out}/deopt.log" 2>&1
 				if [ "$?" == "0" ];	then
 					# echo to console and log
-					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting redundant odex/vdex if present)"
-					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting redundant odex/vdex if present)" >>"${out}/deopt.log" 2>&1
+					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting other odex/vdex if present)"
+					echo "            [i] APK already contains classes.dex - skipping deopt (and deleting other odex/vdex if present)" >>"${out}/deopt.log" 2>&1
 					rm -rf "${deoptOut}/${systemSubdir}/${appDir}/oat"
 					continue
 				fi
-				
-				# verify exactly one vdex file exists
-				if [ ${#appVdexFiles[@]} -ne 1 -o ! -d "${deoptOut}/${systemSubdir}/${appDir}/oat/arm64/" ]; then
-					# echo to console and log
-					echo "            [i] No vdex file found, skipping (resource-only APK?)"
-					echo "            [i] No vdex file found, skipping (resource-only APK?)" >>"${out}/deopt.log" 2>&1
-					continue
-				fi
-				
+
 				# extract dex from vdex
-				"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/${systemSubdir}/${appDir}/oat/arm64/${appVdexFiles[0]}" -o "${deoptOut}/../" >>"${out}/deopt.log" 2>&1
+				"${PREPTOOL_BIN}/vdexExtractor_deopt.sh" -i "${deoptOut}/${systemSubdir}/${appDir}/oat/${appVdexArch}/${appVdexFiles[0]}" -o "${deoptOut}/../" >>"${out}/deopt.log" 2>&1
 				# error-out if non-zero return
 				if [ $? -ne 0 ]; then
 					echo "            [!] Error during vdex extraction (see deopt.log)."
@@ -428,7 +445,7 @@ if [ -d "$1" ]; then
 	echo "[#] Copying misc files from {src} to {out}..."
 	rsync -a --exclude="boot.*" --exclude="system.*" --exclude="vendor.*" "${src}/" "${out}/"
 	
-	echo "[#] Setting unpacked firmware permissions to global rw..."
+	echo "[#] Setting unpacked firmware permissions to 777..."
 	chmod -R 777 "${out}/"
 	
 	echo "[i] All done!"
