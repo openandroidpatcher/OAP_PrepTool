@@ -17,6 +17,7 @@
 # 77: Deopt error; BOOTCLASSPATH entry missing from RAMDisk rc files, or out of sync with vdex table
 
 # TODO: Better logging (e.g. echo deopt commands)
+# TODO: See if I can replace sudo-requirement with fakeroot
 
 # enforce sudo (no way around this)
 if [ $(id -u) != "0" ]; then
@@ -216,9 +217,7 @@ if [ -d "$1" ]; then
 			popd > /dev/null
 			for appDir in "${deOptDirs2do[@]}"; do
 				# unset last-run vars
-				unset appVdexFiles
-				unset appVdexArch
-				
+				(
 				# trim trailing slashes
 				appDir=$(echo $appDir | sed 's|/*$||')
 				echo "        [#] system/${systemSubdir}/${appDir}..."
@@ -300,6 +299,7 @@ if [ -d "$1" ]; then
 				rm -f classes*.dex
 				rm -rf "${deoptOut}/${systemSubdir}/${appDir}/oat"
 				popd > /dev/null
+				)
 			done
 		done
 		rm -rf "${deoptOut}/../vdexExtractor_deodexed"
@@ -311,6 +311,7 @@ if [ -d "$1" ]; then
 		deOptVdexs2do=(*.vdex)
 		popd > /dev/null
 		for vdexFile in "${deOptVdexs2do[@]}"; do
+			(
 			targetJar="${vdexFile%.*}.jar"
 			echo "        [#] ${targetJar}..."
 			if [ ! -f "${deoptOut}/framework/${targetJar}" ]; then
@@ -345,6 +346,7 @@ if [ -d "$1" ]; then
 			rm -f "./classes*.dex"
 			rm -rf "${deoptOut}/${systemSubdir}/${appDir}/oat"
 			popd > /dev/null
+			)
 		done
 		# cleanup
 		rm -rf "${deoptOut}/framework/oat"
